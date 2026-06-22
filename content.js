@@ -43,12 +43,6 @@ const TAG_COLORS = {
   'In Progress': 'tag-progress'
 };
 
-const SEVERITY_CLASS = {
-  healthy: 'sev-green',
-  needsAttention: 'sev-amber',
-  critical: 'sev-red'
-};
-
 const BUCKET_ORDER = [
   'SLA Threat',
   'Missing Product',
@@ -74,71 +68,131 @@ const KNOWN_HEADERS = [
   'Article Status'
 ];
 
-function normalizeHeader(text) {
-  return text.replace(/\s+/g, ' ').trim();
+function log(...args) {
+  console.log('[MissionControl]', ...args);
 }
 
-function findSalesforceTable() {
-  const tables = document.querySelectorAll('table');
-  for (const table of tables) {
-    const headerRow = table.querySelector('thead tr, tr');
-    if (!headerRow) continue;
-    const headerCells = headerRow.querySelectorAll('th, td');
-    const headerTexts = Array.from(headerCells).map(c => normalizeHeader(c.textContent));
-    const matchCount = KNOWN_HEADERS.filter(kh =>
-      headerTexts.some(ht => ht.toLowerCase().includes(kh.toLowerCase()))
-    ).length;
-    if (matchCount >= 3) {
-      const map = {};
-      for (let i = 0; i < headerTexts.length; i++) {
-        const ht = headerTexts[i].toLowerCase();
-        for (const kh of KNOWN_HEADERS) {
-          if (ht.includes(kh.toLowerCase())) {
-            map[kh] = i;
-            break;
-          }
-        }
-      }
-      const rows = table.querySelectorAll('tbody tr');
-      return { table, map, rows: Array.from(rows) };
-    }
-  }
+function norm(text) {
+  return (text || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
-  const grids = document.querySelectorAll('[role="grid"]');
-  for (const grid of grids) {
-    const headerRow = grid.querySelector('[role="row"]');
-    if (!headerRow) continue;
-    const headerCells = headerRow.querySelectorAll('[role="columnheader"]');
-    if (!headerCells.length) continue;
-    const headerTexts = Array.from(headerCells).map(c => normalizeHeader(c.textContent));
-    const matchCount = KNOWN_HEADERS.filter(kh =>
-      headerTexts.some(ht => ht.toLowerCase().includes(kh.toLowerCase()))
-    ).length;
-    if (matchCount >= 3) {
-      const map = {};
-      for (let i = 0; i < headerTexts.length; i++) {
-        const ht = headerTexts[i].toLowerCase();
-        for (const kh of KNOWN_HEADERS) {
-          if (ht.includes(kh.toLowerCase())) {
-            map[kh] = i;
-            break;
+function getCellText(el) {
+  const clone = el.cloneNode(true);
+  const hide = clone.querySelectorAll('button, [role="button"], .slds-checkbox, input, svg, img, .slds-icon');
+  hide.forEach(n => n.remove());
+  return norm(clone.textContent);
+}
+
+function findTableByHeaders() {
+  const headerSelector = 'th, [role="columnheader"], .slds-th__action, .slds-table_header';
+
+  const candidates = document.querySelectorAll('table, [role="grid"], [role="treegrid"]');
+  log(`Found ${candidates.length} table/grid candidates on page`);
+
+  for (const el of candidates) {
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute('role') || '';
+
+    const headers = el.querySelectorAll('th, [role="columnheader"]');
+    if (headers.length < 3) continue;
+
+    const headerTexts = Array.from(headers).map(h => getCellText(h));
+    log(`Table (${tag}/${role}) has ${headers.length} headers:`, headerTexts.slice(0, 6));
+
+    const matched = {};
+    let matchCount = 0;
+
+    for (let i = 0; i < headerTexts.length; i++) {
+      const ht = headerTexts[i].toLowerCase();
+      for (const kh of KNOWN_HEADERS) {
+        const khl = kh.toLowerCase();
+        if (ht.includes(khl) || khl.includes(ht)) {
+          if (!matched[kh]) {
+            matched[kh] = i;
+            matchCount++;
           }
         }
       }
-      const dataRows = grid.querySelectorAll('[role="row"]:not(:first-child)');
-      return { table: grid, map, rows: Array.from(dataRows) };
+    }
+
+    if (matchCount >= 3) {
+      log(`Table matched with ${matchCount} known headers:`, matched);
+
+      let rows = [];
+      if (el.tagName === 'TABLE') {
+        const tbodies = el.querySelectorAll('tbody');
+        if (tbodies.length) {
+          tbodies.forEach(tb => rows.push(...tb.querySelectorAll('tr')));
+        } else {
+          rows = Array.from(el.querySelectorAll('tr'));
+        }
+      } else {
+        const allRows = el.querySelectorAll('[role="row"]');
+        const firstRow = el.querySelector('[role="row"]');
+        const firstCells = firstRow ? firstRow.querySelectorAll('[role="columnheader"]') : [];
+        if (firstCells.length) {
+          rows = Array.from(allRows).slice(1);
+        } else {
+          rows = Array.from(allRows);
+        }
+      }
+
+      const firstHeaderCell = headers[0];
+      const headerRow = firstHeaderCell.closest('tr') || firstHeaderCell.closest('[role="row"]');
+      if (headerRow) {
+        rows = rows.filter(r => r !== headerRow && !r.closest('thead'));
+      }
+
+      log(`Extracted ${rows.length} data rows`);
+      return { map: matched, rows, debug: { headerTexts, matchCount } };
     }
   }
 
   return null;
 }
 
-function getCellText(row, colIndex) {
-  const cells = row.querySelectorAll('td, [role="gridcell"], th');
-  if (colIndex < cells.length) {
-    return normalizeHeader(cells[colIndex].textContent);
+function findTableByTextFallback() {
+  log('Trying text-based fallback extraction');
+  const bodyText = norm(document.body.innerText);
+  const lines = bodyText.split('\n').filter(l => l.trim());
+
+  const caseLines = lines.filter(l => /[A-Z]?\d{6,}/.test(l) && /Status|Progress|Pending|Awaiting|Resolved/i.test(l));
+  log(`Text fallback found ${caseLines.length} candidate lines`);
+
+  if (caseLines.length === 0) return null;
+
+  const rows = caseLines.map(line => {
+    const caseMatch = line.match(/([A-Z]?\d{6,})/);
+    return { text: line, caseNumber: caseMatch ? caseMatch[1] : null };
+  }).filter(r => r.caseNumber);
+
+  if (rows.length === 0) return null;
+
+  const map = {};
+  const headerLine = lines.find(l =>
+    /Case/i.test(l) && /Status/i.test(l)
+  );
+  if (headerLine) {
+    const knownOrder = ['Case Number', 'Status', 'Product Name', 'Issue Summary', 'DaysSinceLastModified', 'Priority', 'Age (In Days)'];
+    const headerParts = headerLine.split(/\s{2,}/).map(norm);
+    headerParts.forEach((hp, i) => {
+      for (const kh of knownOrder) {
+        if (hp.toLowerCase().includes(kh.toLowerCase()) || kh.toLowerCase().includes(hp.toLowerCase())) {
+          map[kh] = i;
+          break;
+        }
+      }
+    });
   }
-  return '';
+
+  return { map, rows: rows.map(r => ({ text: r.text })), isTextFallback: true };
+}
+
+function findSalesforceTable() {
+  const result = findTableByHeaders();
+  if (result) return result;
+  log('Header-based table detection failed, trying text fallback');
+  return findTableByTextFallback();
 }
 
 function parseNum(text) {
@@ -153,15 +207,20 @@ function getResponseTimeRemaining(text) {
   return parseInt(digits, 10);
 }
 
-function parseRow(cells, map) {
+function parseRowFromCells(cells, map) {
   const get = (key) => {
     const idx = map[key];
     if (idx === undefined) return '';
-    return idx < cells.length ? normalizeHeader(cells[idx].textContent) : '';
+    if (idx >= cells.length) return '';
+    const text = getCellText(cells[idx]);
+    return text;
   };
 
   const caseNumber = get('Case Number');
-  if (!caseNumber || !/\d{6,}/.test(caseNumber)) return null;
+  if (!caseNumber) return null;
+
+  const cnClean = caseNumber.replace(/[^A-Za-z0-9]/g, '');
+  if (cnClean.length < 5) return null;
 
   const status = get('Status');
   if (!status) return null;
@@ -183,7 +242,7 @@ function parseRow(cells, map) {
   const productMissing = !productName || productName === '' || productName === '-';
 
   return {
-    caseNumber,
+    caseNumber: cnClean,
     status,
     productName: productMissing ? '' : productName,
     issueSummary,
@@ -205,6 +264,82 @@ function parseRow(cells, map) {
     missingKb: !articleStatus || articleStatus === '--None--' || articleStatus === '',
     reminderCandidate: status === 'Resolved Pending Confirmation' && (!hasAutoClose || (daysSinceLastModified !== null && daysSinceLastModified > 3))
   };
+}
+
+function parseRowFromText(line, map) {
+  const fields = line.split(/\s{2,}/).map(norm);
+  const get = (key) => {
+    const idx = map[key];
+    if (idx === undefined) return '';
+    if (idx >= fields.length) return '';
+    return fields[idx];
+  };
+
+  const caseMatch = line.match(/([A-Z]?\d{6,})/);
+  if (!caseMatch) return null;
+
+  const caseNumber = caseMatch[1];
+  const status = get('Status') || '';
+
+  const productName = get('Product Name');
+  const issueSummary = get('Issue Summary');
+  const daysText = get('DaysSinceLastModified');
+  const priority = get('Priority');
+  const ageText = get('Age (In Days)');
+
+  const daysSinceLastModified = parseNum(daysText);
+  const age = parseNum(ageText);
+  const productMissing = !productName || productName === '' || productName === '-';
+  const statusMatch = ACTIVE_STATUSES.concat(ENGINEERING_STATUSES).find(s => line.includes(s));
+
+  return {
+    caseNumber,
+    status: statusMatch || status || 'Unknown',
+    productName: productMissing ? '' : (productName || ''),
+    issueSummary: issueSummary || '',
+    daysSinceLastModified,
+    priority,
+    age,
+    autoCloseDate: null,
+    responseTimeRemaining: null,
+    articleStatus: null,
+    isActive: ACTIVE_STATUSES.includes(statusMatch || status),
+    isEngineering: ENGINEERING_STATUSES.includes(statusMatch || status),
+    isPar: (statusMatch || status) === 'PAR Reported',
+    productMissing,
+    statusAbbrev: STATUS_ABBREV[statusMatch || status] || (statusMatch || status),
+    actionTag: getActionTag(statusMatch || status, null, productMissing, ''),
+    severity: getSeverity(daysSinceLastModified),
+    freshness: getFreshness(daysSinceLastModified),
+    slaStatus: null,
+    missingKb: false,
+    reminderCandidate: false
+  };
+}
+
+function parseTableData(tableData) {
+  if (!tableData) return [];
+  const rows = [];
+  const { map, rows: rowEls, isTextFallback } = tableData;
+
+  if (isTextFallback) {
+    for (const r of rowEls) {
+      const parsed = parseRowFromText(r.text, map);
+      if (parsed) rows.push(parsed);
+    }
+    log(`Text fallback parsed ${rows.length} rows`);
+    return rows;
+  }
+
+  for (const rowEl of rowEls) {
+    const cells = rowEl.querySelectorAll('td, [role="gridcell"], th');
+    if (cells.length < 3) continue;
+    const parsed = parseRowFromCells(cells, map);
+    if (parsed) rows.push(parsed);
+  }
+
+  log(`DOM parser extracted ${rows.length} valid rows from ${rowEls.length} row elements`);
+  return rows;
 }
 
 function getActionTag(status, responseTimeRemaining, productMissing, articleStatus) {
@@ -238,23 +373,6 @@ function getSlaStatus(responseTimeRemaining) {
   return 'safe';
 }
 
-function parseTableData(tableData) {
-  if (!tableData) return [];
-  const rows = [];
-  const { map, rows: rowEls } = tableData;
-
-  for (const rowEl of rowEls) {
-    const isHeader = rowEl.closest('thead') !== null;
-    if (isHeader) continue;
-    const cells = rowEl.querySelectorAll('td, [role="gridcell"], th');
-    if (cells.length < 3) continue;
-    const parsed = parseRow(cells, map);
-    if (parsed) rows.push(parsed);
-  }
-
-  return rows;
-}
-
 function computeQueueState(allRows) {
   const activeRows = allRows.filter(r => r.isActive);
   const hasSlaThreat = allRows.some(r => r.slaStatus === 'critical');
@@ -282,10 +400,7 @@ function sortPriorities(allRows, includePar) {
     const bucketIdx = BUCKET_ORDER.indexOf(row.actionTag);
     if (bucketIdx === -1) continue;
 
-    items.push({
-      ...row,
-      bucketIdx
-    });
+    items.push({ ...row, bucketIdx });
   }
 
   items.sort((a, b) => {
@@ -305,103 +420,82 @@ function computeWidgetData(allRows) {
   const activeRows = allRows.filter(r => r.isActive);
   const engRows = allRows.filter(r => r.isEngineering);
 
-  const slaCritical = allRows.filter(r => r.slaStatus === 'critical').length;
-  const slaWarning = allRows.filter(r => r.slaStatus === 'warning').length;
-  const slaSafe = allRows.filter(r => r.slaStatus === 'safe').length;
-
-  const missingProductCount = allRows.filter(r => r.productMissing).length;
-  const productAssignedCount = allRows.filter(r => !r.productMissing && r.productName).length;
-
-  const awaitingUkg = activeRows.filter(r => r.status === 'Awaiting UKG Response').length;
-  const awaitingCustomer = activeRows.filter(r => r.status === 'Awaiting Customer Information').length;
-  const inProgress = activeRows.filter(r => r.status === 'In Progress').length;
-  const rpc = activeRows.filter(r => r.status === 'Resolved Pending Confirmation').length;
-  const rpfu = activeRows.filter(r => r.status === 'Resolved Pending Follow Up').length;
-  const needsAttention = activeRows.filter(r => r.severity === 'needsAttention').length;
-  const criticalCount = activeRows.filter(r => r.severity === 'critical').length;
-
-  const fresh = activeRows.filter(r => r.freshness === 'fresh').length;
-  const ripe = activeRows.filter(r => r.freshness === 'ripe').length;
-  const rotting = activeRows.filter(r => r.freshness === 'rotting').length;
-
-  const reminderCandidates = allRows.filter(r => r.reminderCandidate).length;
-  const reminderMissingAutoClose = allRows.filter(r => r.status === 'Resolved Pending Confirmation' && !r.autoCloseDate).length;
-  const reminderFollowUp = allRows.filter(r => r.status === 'Resolved Pending Confirmation' && r.daysSinceLastModified !== null && r.daysSinceLastModified > 3).length;
-
-  const missingKbCount = allRows.filter(r => r.missingKb).length;
-  const linkedKbCount = allRows.filter(r => !r.missingKb && r.articleStatus && r.articleStatus !== '--None--' && r.articleStatus !== '').length;
-
-  const parReported = engRows.filter(r => r.status === 'PAR Reported').length;
-  const awaitingSd = engRows.filter(r => r.status === 'Awaiting Solution Deployment').length;
-  const hold = engRows.filter(r => r.status === 'Hold').length;
-  const parAges = engRows.filter(r => r.status === 'PAR Reported' && r.age !== null).map(r => r.age);
-  const oldestParAge = parAges.length ? Math.max(...parAges) : null;
-  const parOver30 = parAges.filter(a => a > 30).length;
-  const parOver60 = parAges.filter(a => a > 60).length;
-  const parOver90 = parAges.filter(a => a > 90).length;
-
   return {
-    slaCritical,
-    slaWarning,
-    slaSafe,
-    slaTotal: slaCritical + slaWarning + slaSafe,
+    slaCritical: allRows.filter(r => r.slaStatus === 'critical').length,
+    slaWarning: allRows.filter(r => r.slaStatus === 'warning').length,
+    slaSafe: allRows.filter(r => r.slaStatus === 'safe').length,
 
-    missingProductCount,
-    productAssignedCount,
+    missingProductCount: allRows.filter(r => r.productMissing).length,
+    productAssignedCount: allRows.filter(r => !r.productMissing && r.productName).length,
 
     activeWorkQueue: {
-      awaitingUkg,
-      awaitingCustomer,
-      inProgress,
-      rpc,
-      rpfu,
-      needsAttention,
-      criticalCount
+      awaitingUkg: activeRows.filter(r => r.status === 'Awaiting UKG Response').length,
+      awaitingCustomer: activeRows.filter(r => r.status === 'Awaiting Customer Information').length,
+      inProgress: activeRows.filter(r => r.status === 'In Progress').length,
+      rpc: activeRows.filter(r => r.status === 'Resolved Pending Confirmation').length,
+      rpfu: activeRows.filter(r => r.status === 'Resolved Pending Follow Up').length,
+      needsAttention: activeRows.filter(r => r.severity === 'needsAttention').length,
+      criticalCount: activeRows.filter(r => r.severity === 'critical').length
     },
 
-    ageHealth: { fresh, ripe, rotting },
-
-    reminderCandidates,
-    reminderMissingAutoClose,
-    reminderFollowUp,
-
-    missingKbCount,
-    linkedKbCount,
-
-    engineering: {
-      parReported,
-      awaitingSd,
-      hold,
-      oldestParAge: oldestParAge !== null ? `${oldestParAge}d` : '—',
-      parOver30,
-      parOver60,
-      parOver90
+    ageHealth: {
+      fresh: activeRows.filter(r => r.freshness === 'fresh').length,
+      ripe: activeRows.filter(r => r.freshness === 'ripe').length,
+      rotting: activeRows.filter(r => r.freshness === 'rotting').length
     },
 
-    closureOpportunities: rpfu + rpc
+    reminderCandidates: allRows.filter(r => r.reminderCandidate).length,
+    reminderMissingAutoClose: allRows.filter(r => r.status === 'Resolved Pending Confirmation' && !r.autoCloseDate).length,
+    reminderFollowUp: allRows.filter(r => r.status === 'Resolved Pending Confirmation' && r.daysSinceLastModified !== null && r.daysSinceLastModified > 3).length,
+
+    missingKbCount: allRows.filter(r => r.missingKb).length,
+    linkedKbCount: allRows.filter(r => !r.missingKb && r.articleStatus && r.articleStatus !== '--None--' && r.articleStatus !== '').length,
+
+    engineering: (() => {
+      const parAges = engRows.filter(r => r.status === 'PAR Reported' && r.age !== null).map(r => r.age);
+      return {
+        parReported: engRows.filter(r => r.status === 'PAR Reported').length,
+        awaitingSd: engRows.filter(r => r.status === 'Awaiting Solution Deployment').length,
+        hold: engRows.filter(r => r.status === 'Hold').length,
+        oldestParAge: parAges.length ? `${Math.max(...parAges)}d` : '—',
+        parOver30: parAges.filter(a => a > 30).length,
+        parOver60: parAges.filter(a => a > 60).length,
+        parOver90: parAges.filter(a => a > 90).length
+      };
+    })(),
+
+    closureOpportunities: activeRows.filter(r => r.status === 'Resolved Pending Confirmation').length + activeRows.filter(r => r.status === 'Resolved Pending Follow Up').length
   };
 }
 
 function extractMissionData() {
+  log('extractMissionData called');
+
   const tableData = findSalesforceTable();
   if (!tableData) {
-    return { error: 'No Salesforce queue table detected. Navigate to a queue view and try again.' };
+    const tables = document.querySelectorAll('table').length;
+    const grids = document.querySelectorAll('[role="grid"]').length;
+    log(`No table found. Page has ${tables} tables, ${grids} grids`);
+    return { error: `No Salesforce queue table detected. Found ${tables} tables, ${grids} grids on page.` };
   }
 
   const allRows = parseTableData(tableData);
   if (!allRows.length) {
-    return { error: 'Could not parse any case rows from the queue table.' };
+    log('Table found but no rows could be parsed. Debug:', tableData.debug);
+    return {
+      error: `Could not parse any case rows. Table matched headers but got 0 valid rows from ${tableData.rows.length} row elements. Check DevTools console for details.`
+    };
   }
 
+  log(`Successfully parsed ${allRows.length} cases`);
   const priorityItems = sortPriorities(allRows, false);
   const widgetData = computeWidgetData(allRows);
   const queueState = computeQueueState(allRows);
-  const slaRisks = widgetData.slaCritical + widgetData.slaWarning;
 
   return {
     queueState,
     visibleCases: allRows.length,
-    slaRisks,
+    slaRisks: widgetData.slaCritical + widgetData.slaWarning,
     closureOpportunities: widgetData.closureOpportunities,
     priorityItems: priorityItems.map(r => ({
       caseNumber: r.caseNumber,
@@ -423,3 +517,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(extractMissionData());
   }
 });
+
+log('Content script loaded');
