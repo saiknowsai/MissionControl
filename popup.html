@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mission Control</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div class="header-top">
+        <div>
+          <div class="eyebrow">Support Engineer</div>
+          <h1>Mission Control</h1>
+          <p class="subtitle">Live queue intelligence from the active Salesforce page.</p>
+        </div>
+        <div class="header-actions">
+          <label class="toggle-wrap" title="Include PAR cases in Today's Priorities">
+            <span class="toggle-label">Include PAR</span>
+            <input type="checkbox" id="includePar" />
+            <span class="toggle-track"></span>
+          </label>
+          <button id="refreshBtn" class="btn">Refresh</button>
+        </div>
+      </div>
+      <div class="metrics-row">
+        <div class="metric-card">
+          <div class="metric-label">Queue State</div>
+          <div class="metric-value" id="queueState">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Visible Cases</div>
+          <div class="metric-value" id="visibleCases">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">SLA Risks</div>
+          <div class="metric-value" id="slaRisks">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Closure Opps</div>
+          <div class="metric-value" id="closureOpps">—</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="dashboard">
+      <div class="col-left">
+        <div class="panel priorities-panel">
+          <div class="panel-head">
+            <h2>Today's Priorities</h2>
+            <span class="badge badge-live">Live</span>
+          </div>
+          <div id="priorityList" class="priority-list"></div>
+          <div id="priorityEmpty" class="empty-state">No priority cases found.</div>
+        </div>
+      </div>
+
+      <div class="col-right">
+        <div class="panel">
+          <div class="panel-head"><h3>SLA Threats</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">Critical</span><strong class="val" id="slaCritical">—</strong></div>
+            <div class="widget-row"><span class="wl">Warning</span><strong class="val" id="slaWarning">—</strong></div>
+            <div class="widget-row"><span class="wl">Safe</span><strong class="val" id="slaSafe">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Missing Product</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">Missing</span><strong class="val" id="missingProductCount">—</strong></div>
+            <div class="widget-row"><span class="wl">Assigned</span><strong class="val" id="productAssignedCount">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Active Work Queue</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">Awaiting UKG</span><strong class="val" id="aw-awaitingUkg">—</strong></div>
+            <div class="widget-row"><span class="wl">Awaiting Customer</span><strong class="val" id="aw-awaitingCustomer">—</strong></div>
+            <div class="widget-row"><span class="wl">In Progress</span><strong class="val" id="aw-inProgress">—</strong></div>
+            <div class="widget-row"><span class="wl">RPC</span><strong class="val" id="aw-rpc">—</strong></div>
+            <div class="widget-row"><span class="wl">RPFU</span><strong class="val" id="aw-rpfu">—</strong></div>
+            <div class="widget-row sep"><span class="wl">Needs Attention</span><strong class="val amber" id="needsAttention">—</strong></div>
+            <div class="widget-row"><span class="wl">Critical</span><strong class="val red" id="criticalCount">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Case Age Health</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">Fresh (0-2d)</span><strong class="val green" id="ageFresh">—</strong></div>
+            <div class="widget-row"><span class="wl">Ripe (3-5d)</span><strong class="val amber" id="ageRipe">—</strong></div>
+            <div class="widget-row"><span class="wl">Rotting (&gt;5d)</span><strong class="val red" id="ageRotting">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Reminder Candidates</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">Total</span><strong class="val" id="reminderTotal">—</strong></div>
+            <div class="widget-row"><span class="wl">Missing Auto Close</span><strong class="val" id="reminderMissingAc">—</strong></div>
+            <div class="widget-row"><span class="wl">Follow Up Required</span><strong class="val" id="reminderFollowUp">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Missing KB Links</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">Missing KB</span><strong class="val" id="missingKbCount">—</strong></div>
+            <div class="widget-row"><span class="wl">Linked KB</span><strong class="val" id="linkedKbCount">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Engineering Watchlist</h3></div>
+          <div class="widget">
+            <div class="widget-row"><span class="wl">PAR Reported</span><strong class="val" id="engParReported">—</strong></div>
+            <div class="widget-row"><span class="wl">Awaiting Solution Dep.</span><strong class="val" id="engAwaitingSd">—</strong></div>
+            <div class="widget-row"><span class="wl">Hold</span><strong class="val" id="engHold">—</strong></div>
+            <div class="widget-row sep"><span class="wl">Oldest PAR Age</span><strong class="val" id="engOldest">—</strong></div>
+            <div class="widget-row"><span class="wl">&gt;30 days</span><strong class="val" id="engOver30">—</strong></div>
+            <div class="widget-row"><span class="wl">&gt;60 days</span><strong class="val" id="engOver60">—</strong></div>
+            <div class="widget-row"><span class="wl">&gt;90 days</span><strong class="val" id="engOver90">—</strong></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h3>Notes</h3></div>
+          <div class="notes-content">
+            KB link rate is tracked separately on the TSE dashboard. This extension flags queue health, closure opportunities, backlog visibility, queue hygiene, and operational execution.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

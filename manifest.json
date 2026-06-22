@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Support Engineer Mission Control",
+  "version": "0.1.0",
+  "description": "Turns Salesforce queue pages into a live support cockpit.",
+  "action": {
+    "default_title": "Mission Control",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "*://*.lightning.force.com/*",
+    "*://*.salesforce.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.lightning.force.com/*",
+        "*://*.salesforce.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
