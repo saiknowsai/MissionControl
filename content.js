@@ -65,7 +65,11 @@ const KNOWN_HEADERS = [
   'Age (In Days)',
   'Auto Close Date',
   'Response Time Remaining (Min)',
-  'Article Status'
+  'Article Status',
+  'Account Name',
+  'Contact Name',
+  'Milestone Violation',
+  'Last Modified By Alias'
 ];
 
 function log(...args) {
@@ -188,10 +192,68 @@ function findTableByTextFallback() {
   return { map, rows: rows.map(r => ({ text: r.text })), isTextFallback: true };
 }
 
+function findCaseNumbersInPage() {
+  log('Trying case-number-first detection');
+  const walker = document.createTreeWalker(document.body, 4, null, false);
+  const candidates = [];
+  let node;
+  while (node = walker.nextNode()) {
+    const text = norm(node.textContent);
+    const m = text.match(/\b(\d{8})\b/);
+    if (m) {
+      const cell = node.closest('td') || node.closest('[role="gridcell"]') || node.closest('th');
+      if (cell) {
+        const row = cell.closest('tr') || cell.closest('[role="row"]');
+        if (row) {
+          const table = row.closest('table') || row.closest('[role="grid"]');
+          if (table && !candidates.some(c => c.table === table)) {
+            candidates.push({ table, row });
+          }
+        }
+      }
+    }
+  }
+
+  log(`Found ${candidates.length} tables via case numbers`);
+
+  for (const { table, row } of candidates) {
+    const headerCells = table.querySelectorAll('th, [role="columnheader"]');
+    if (headerCells.length < 3) continue;
+    const headerTexts = Array.from(headerCells).map(h => getCellText(h));
+    const matched = {};
+    let matchCount = 0;
+    for (let i = 0; i < headerTexts.length; i++) {
+      const ht = headerTexts[i].toLowerCase();
+      for (const kh of KNOWN_HEADERS) {
+        if (ht.includes(kh.toLowerCase())) {
+          if (!matched[kh]) { matched[kh] = i; matchCount++; }
+        }
+      }
+    }
+    if (matchCount >= 3) {
+      let allRows;
+      if (table.tagName === 'TABLE') {
+        allRows = table.querySelectorAll('tbody tr, tbody [role="row"]');
+        if (!allRows.length) allRows = table.querySelectorAll('tr');
+      } else {
+        allRows = table.querySelectorAll('[role="row"]');
+      }
+      const headerRow = (headerCells[0].closest('tr') || headerCells[0].closest('[role="row"]'));
+      const dataRows = Array.from(allRows).filter(r => r !== headerRow && !r.closest('thead'));
+      log(`Case-number detection: ${dataRows.length} data rows, headers matched: ${matchCount}`);
+      return { map: matched, rows: dataRows };
+    }
+  }
+  return null;
+}
+
 function findSalesforceTable() {
   const result = findTableByHeaders();
   if (result) return result;
-  log('Header-based table detection failed, trying text fallback');
+  log('Header-based table detection failed, trying case-number-first detection');
+  const result2 = findCaseNumbersInPage();
+  if (result2) return result2;
+  log('Case-number detection failed, trying text fallback');
   return findTableByTextFallback();
 }
 
@@ -331,14 +393,25 @@ function parseTableData(tableData) {
     return rows;
   }
 
+  const totalRowEls = rowEls.length;
+  let cellsTooFew = 0;
+  let parseFailed = 0;
+
   for (const rowEl of rowEls) {
-    const cells = rowEl.querySelectorAll('td, [role="gridcell"], th');
-    if (cells.length < 3) continue;
+    let cells = rowEl.querySelectorAll('td, [role="gridcell"], th');
+    if (cells.length < 3) {
+      cells = rowEl.querySelectorAll(':scope > *');
+    }
+    if (cells.length < 3) {
+      cellsTooFew++;
+      continue;
+    }
     const parsed = parseRowFromCells(cells, map);
     if (parsed) rows.push(parsed);
+    else parseFailed++;
   }
 
-  log(`DOM parser extracted ${rows.length} valid rows from ${rowEls.length} row elements`);
+  log(`DOM parser: ${rows.length} valid, ${totalRowEls} rows total (${cellsTooFew} had <3 cells, ${parseFailed} parse failures)`);
   return rows;
 }
 
